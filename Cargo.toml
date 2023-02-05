@@ -1,0 +1,18 @@
+[package]
+name = "pdu-loop-test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+smoltcp = { version = "0.8.1", default-features = false, features = [ "proto-ipv4", "phy-raw_socket", "socket-raw", "medium-ethernet" ] }
+spin = { version = "0.9.4", default-features = false, features = ["rwlock"] }
+futures-lite = { version = "1.12.0", default-features = false }
+tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "sync"] }
+env_logger = "0.10.0"
+log = "0.4.17"
+
+[dev-dependencies]
+env_logger = "0.10.0"
+smol = "1.3.0"
