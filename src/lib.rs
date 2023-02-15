@@ -169,12 +169,13 @@ mod tests {
     use core::{task::Poll, time::Duration};
     use smoltcp::wire::{EthernetAddress, EthernetFrame};
     use std::thread;
+    use tokio::runtime::Handle;
 
     static STORAGE: PduStorage<16, 128> = PduStorage::<16, 128>::new();
     static PDU_LOOP: PduLoop = PduLoop::new(STORAGE.as_ref());
 
-    #[test]
-    fn broadcast_zeros() {
+    #[tokio::test]
+    async fn broadcast_zeros() {
         // Comment out to make this test work with miri
         env_logger::try_init().ok();
 
@@ -183,10 +184,12 @@ mod tests {
 
         let (s, mut r) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
+        let handle = Handle::current();
+
         let tx_handle = thread::Builder::new()
             .name("TX task".to_string())
             .spawn(move || {
-                futures_lite::future::block_on(async move {
+                handle.block_on(async move {
                     let mut packet_buf = [0u8; 1536];
 
                     log::info!("Spawn TX task");
@@ -205,7 +208,7 @@ mod tests {
                                 s.send(packet.to_vec()).unwrap();
 
                                 // Simulate packet send delay
-                                smol::Timer::after(Duration::from_millis(1));
+                                tokio::time::sleep(Duration::from_millis(1));
 
                                 log::info!("Sent packet");
 
@@ -220,10 +223,12 @@ mod tests {
             })
             .unwrap();
 
+        let handle = Handle::current();
+
         let rx_handle = thread::Builder::new()
             .name("RX task".to_string())
             .spawn(move || {
-                futures_lite::future::block_on(async move {
+                handle.block_on(async move {
                     log::info!("Spawn RX task");
 
                     while let Some(ethernet_frame) = r.recv().await {
@@ -245,8 +250,6 @@ mod tests {
             })
             .unwrap();
 
-        futures_lite::future::block_on(async move {
-            PDU_LOOP.pdu_broadcast_zeros(0x1234, 16).await.unwrap();
-        });
+        PDU_LOOP.pdu_broadcast_zeros(0x1234, 16).await.unwrap();
     }
 }

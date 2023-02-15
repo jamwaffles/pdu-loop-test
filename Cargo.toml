@@ -9,7 +9,7 @@ edition = "2021"
 smoltcp = { version = "0.8.1", default-features = false, features = [ "proto-ipv4", "phy-raw_socket", "socket-raw", "medium-ethernet" ] }
 spin = { version = "0.9.4", default-features = false, features = ["rwlock"] }
 futures-lite = { version = "1.12.0", default-features = false }
-tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1.21.2", features = ["rt-multi-thread", "macros", "sync", "time"] }
 env_logger = "0.10.0"
 log = "0.4.17"
 nom = "7.1.3"
