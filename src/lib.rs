@@ -185,7 +185,7 @@ mod tests {
         let tx_handle = thread::Builder::new()
             .name("TX task".to_string())
             .spawn(move || {
-                smol::block_on(async move {
+                futures_lite::future::block_on(async move {
                     let mut packet_buf = [0u8; 1536];
 
                     log::info!("Spawn TX task");
@@ -222,7 +222,7 @@ mod tests {
         let rx_handle = thread::Builder::new()
             .name("RX task".to_string())
             .spawn(move || {
-                smol::block_on(async move {
+                futures_lite::future::block_on(async move {
                     log::info!("Spawn RX task");
 
                     while let Some(ethernet_frame) = r.recv().await {
@@ -244,7 +244,7 @@ mod tests {
             })
             .unwrap();
 
-        smol::block_on(async move {
+        futures_lite::future::block_on(async move {
             PDU_LOOP.pdu_broadcast_zeros(0x1234, 16).await.unwrap();
         });
     }
