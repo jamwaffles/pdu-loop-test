@@ -9,6 +9,8 @@ use core::{
 };
 use std::task::Waker;
 
+use spin::RwLock;
+
 use crate::{Command, Error};
 
 #[derive(Debug)]
@@ -31,6 +33,8 @@ pub struct PduFrame {
 
     // TODO: Un-pub
     pub index: u8,
+
+    pub waker: spin::RwLock<Option<Waker>>,
 }
 
 pub struct PduStorage<const N: usize, const DATA: usize> {
@@ -92,6 +96,7 @@ impl<'a> PduStorageRef<'a> {
                 // TODO: Command, etc
                 len: data_length,
                 index: idx_u8,
+                waker: RwLock::new(None),
             });
 
             let buf_ptr = addr_of_mut!((*frame.as_ptr()).buffer);
@@ -100,7 +105,6 @@ impl<'a> PduStorageRef<'a> {
 
         Ok(FrameBox {
             frame,
-            waker: None,
             _lifetime: PhantomData,
         })
     }
@@ -120,7 +124,6 @@ impl<'a> PduStorageRef<'a> {
 
         Some(FrameBox {
             frame,
-            waker: None,
             _lifetime: PhantomData,
         })
     }
@@ -250,7 +253,6 @@ impl<const N: usize> FrameElement<N> {
 #[derive(Debug)]
 pub struct FrameBox<'a> {
     pub frame: NonNull<FrameElement<0>>,
-    pub waker: Option<Waker>,
     pub _lifetime: PhantomData<&'a mut FrameElement<0>>,
 }
 
@@ -310,15 +312,16 @@ impl<'a> FrameBox<'a> {
 
     // TODO: Move to ReceivingFrame
     pub fn mark_received(mut self) -> Result<(), Error> {
-        // let (frame, buf) = unsafe { self.frame_and_buf_mut() };
-        let index = unsafe { self.frame() }.index;
+        let (frame, buf) = unsafe { self.frame_and_buf_mut() };
 
-        log::trace!("Mark received {:?}", self.waker);
+        let idx = frame.index;
 
-        let waker = self.waker.take().ok_or_else(|| {
+        log::trace!("Mark received, waker is {:?}", frame.waker);
+
+        let waker = frame.waker.write().take().ok_or_else(|| {
             log::error!(
                 "Attempted to wake frame #{} with no waker, possibly caused by timeout",
-                index
+                idx
             );
 
             Error::InvalidFrameState
@@ -350,17 +353,22 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         self.count += 1;
 
-        println!("Poll fut {:?} times", self.count);
+        log::debug!("Poll fut {:?} times", self.count);
 
         let mut rxin = match self.frame.take() {
             Some(r) => r,
             None => return Poll::Ready(Err(Error::NoFrame)),
         };
 
-        if let Some(w) = rxin.waker.replace(cx.waker().clone()) {
-            println!("Have waker");
+        if let Some(w) = unsafe { rxin.frame() }
+            .waker
+            .write()
+            .replace(cx.waker().clone())
+        {
+            log::debug!("Have waker");
+            w.wake();
         } else {
-            println!("Set waker");
+            log::debug!("Set waker");
         }
 
         self.frame = Some(rxin);

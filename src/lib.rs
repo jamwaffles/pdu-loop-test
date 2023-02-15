@@ -59,7 +59,6 @@ impl<'a> PduLoop<'a> {
                 // TODO: Wrap in `SendableFrame`
                 FrameBox {
                     frame,
-                    waker: None,
                     _lifetime: PhantomData,
                 }
             } else {
