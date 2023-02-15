@@ -352,6 +352,19 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         println!("Poll fut {:?} times", self.count);
 
+        let mut rxin = match self.frame.take() {
+            Some(r) => r,
+            None => return Poll::Ready(Err(Error::NoFrame)),
+        };
+
+        if let Some(w) = rxin.waker.replace(cx.waker().clone()) {
+            println!("Have waker");
+        } else {
+            println!("Set waker");
+        }
+
+        self.frame = Some(rxin);
+
         if self.count > 10 {
             return Poll::Ready(Ok(()));
         } else {
