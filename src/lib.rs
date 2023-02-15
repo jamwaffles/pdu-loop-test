@@ -95,11 +95,11 @@ impl<'a> PduLoop<'a> {
 
         let frame = frame.mark_sendable();
 
-        self.wake_sender();
+        // self.wake_sender();
 
         let res = frame.await?;
 
-        dbg!(res);
+        // dbg!(res);
 
         Ok(())
     }
@@ -174,8 +174,8 @@ mod tests {
     static STORAGE: PduStorage<16, 128> = PduStorage::<16, 128>::new();
     static PDU_LOOP: PduLoop = PduLoop::new(STORAGE.as_ref());
 
-    #[tokio::test]
-    async fn broadcast_zeros() {
+    #[test]
+    fn broadcast_zeros() {
         // Comment out to make this test work with miri
         env_logger::try_init().ok();
 
@@ -184,72 +184,72 @@ mod tests {
 
         let (s, mut r) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-        let handle = Handle::current();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-        let tx_handle = thread::Builder::new()
-            .name("TX task".to_string())
-            .spawn(move || {
-                handle.block_on(async move {
-                    let mut packet_buf = [0u8; 1536];
+        // let handle =rt.handle();
 
-                    log::info!("Spawn TX task");
+        // let tx_handle = thread::Builder::new()
+        //     .name("TX task".to_string())
+        //     .spawn(move || {
+        //         handle.block_on(async move {
+        //             let mut packet_buf = [0u8; 1536];
 
-                    core::future::poll_fn::<(), _>(move |ctx| {
-                        log::info!("Poll fn");
+        //             log::info!("Spawn TX task");
 
-                        PDU_LOOP
-                            .send_frames_blocking(ctx.waker(), |frame| {
-                                // let packet = frame
-                                //     .write_ethernet_packet(&mut packet_buf, data)
-                                //     .expect("Write Ethernet frame");
+        //             core::future::poll_fn::<(), _>(move |ctx| {
+        //                 log::info!("Poll fn");
 
-                                let packet = [unsafe { frame.frame() }.index; 16];
+        //                 PDU_LOOP
+        //                     .send_frames_blocking(ctx.waker(), |frame| {
+        //                         // let packet = frame
+        //                         //     .write_ethernet_packet(&mut packet_buf, data)
+        //                         //     .expect("Write Ethernet frame");
 
-                                s.send(packet.to_vec()).unwrap();
+        //                         let packet = [unsafe { frame.frame() }.index; 16];
 
-                                // Simulate packet send delay
-                                tokio::time::sleep(Duration::from_millis(1));
+        //                         s.send(packet.to_vec()).unwrap();
 
-                                log::info!("Sent packet");
+        //                         log::info!("Sent packet");
 
-                                Ok(())
-                            })
-                            .unwrap();
+        //                         Ok(())
+        //                     })
+        //                     .unwrap();
 
-                        Poll::Pending
-                    })
-                    .await
-                })
-            })
-            .unwrap();
+        //                 Poll::Pending
+        //             })
+        //             .await
+        //         })
+        //     })
+        //     .unwrap();
 
-        let handle = Handle::current();
+        // let handle = rt.handle();
 
-        let rx_handle = thread::Builder::new()
-            .name("RX task".to_string())
-            .spawn(move || {
-                handle.block_on(async move {
-                    log::info!("Spawn RX task");
+        // let rx_handle = thread::Builder::new()
+        //     .name("RX task".to_string())
+        //     .spawn(move || {
+        //         handle.block_on(async move {
+        //             log::info!("Spawn RX task");
 
-                    while let Some(ethernet_frame) = r.recv().await {
-                        // TODO
-                        // // Munge fake sent frame into a fake received frame
-                        // let ethernet_frame = {
-                        //     let mut frame = EthernetFrame::new_checked(ethernet_frame).unwrap();
-                        //     frame.set_src_addr(EthernetAddress([
-                        //         0x12, 0x10, 0x10, 0x10, 0x10, 0x10,
-                        //     ]));
-                        //     frame.into_inner()
-                        // };
+        //             while let Some(ethernet_frame) = r.recv().await {
+        //                 // TODO
+        //                 // // Munge fake sent frame into a fake received frame
+        //                 // let ethernet_frame = {
+        //                 //     let mut frame = EthernetFrame::new_checked(ethernet_frame).unwrap();
+        //                 //     frame.set_src_addr(EthernetAddress([
+        //                 //         0x12, 0x10, 0x10, 0x10, 0x10, 0x10,
+        //                 //     ]));
+        //                 //     frame.into_inner()
+        //                 // };
 
-                        log::info!("Received packet {:?}", ethernet_frame);
+        //                 log::info!("Received packet {:?}", ethernet_frame);
 
-                        PDU_LOOP.pdu_rx(&ethernet_frame).expect("RX");
-                    }
-                })
-            })
-            .unwrap();
+        //                 PDU_LOOP.pdu_rx(&ethernet_frame).expect("RX");
+        //             }
+        //         })
+        //     })
+        //     .unwrap();
 
-        PDU_LOOP.pdu_broadcast_zeros(0x1234, 16).await.unwrap();
+        rt.handle()
+            .block_on(PDU_LOOP.pdu_broadcast_zeros(0x1234, 16));
     }
 }

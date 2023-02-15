@@ -381,7 +381,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             log::trace!("Replace waker {:?}", rxin.waker);
 
             if let Some(w) = rxin.waker.replace(cx.waker().clone()) {
-                w.wake();
+                // w.wake();
             }
             self.frame = Some(rxin);
             return Poll::Pending;
