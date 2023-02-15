@@ -31,8 +31,6 @@ pub struct PduFrame {
 
     // TODO: Un-pub
     pub index: u8,
-
-    waker: Option<Waker>,
 }
 
 pub struct PduStorage<const N: usize, const DATA: usize> {
@@ -94,7 +92,6 @@ impl<'a> PduStorageRef<'a> {
                 // TODO: Command, etc
                 len: data_length,
                 index: idx_u8,
-                waker: None,
             });
 
             let buf_ptr = addr_of_mut!((*frame.as_ptr()).buffer);
@@ -103,6 +100,7 @@ impl<'a> PduStorageRef<'a> {
 
         Ok(FrameBox {
             frame,
+            waker: None,
             _lifetime: PhantomData,
         })
     }
@@ -122,6 +120,7 @@ impl<'a> PduStorageRef<'a> {
 
         Some(FrameBox {
             frame,
+            waker: None,
             _lifetime: PhantomData,
         })
     }
@@ -248,9 +247,10 @@ impl<const N: usize> FrameElement<N> {
 
 // Used to store a FrameElement with erased const generics
 // TODO: Create wrapper types so we can confine method calls to only certain states
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct FrameBox<'a> {
     pub frame: NonNull<FrameElement<0>>,
+    pub waker: Option<Waker>,
     pub _lifetime: PhantomData<&'a mut FrameElement<0>>,
 }
 
@@ -307,12 +307,15 @@ impl<'a> FrameBox<'a> {
 
     // TODO: Move to ReceivingFrame
     pub fn mark_received(mut self) -> Result<(), Error> {
-        let (frame, buf) = unsafe { self.frame_and_buf_mut() };
+        // let (frame, buf) = unsafe { self.frame_and_buf_mut() };
+        let index = unsafe { self.frame() }.index;
 
-        let waker = frame.waker.take().ok_or_else(|| {
+        log::trace!("Mark received {:?}", self.waker);
+
+        let waker = self.waker.take().ok_or_else(|| {
             log::error!(
                 "Attempted to wake frame #{} with no waker, possibly caused by timeout",
-                frame.index
+                index
             );
 
             Error::InvalidFrameState
@@ -338,7 +341,9 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
     ) -> Poll<Self::Output> {
-        let rxin = match self.frame.take() {
+        log::trace!("Poll fut");
+
+        let mut rxin = match self.frame.take() {
             Some(r) => r,
             None => return Poll::Ready(Err(Error::NoFrame)),
         };
@@ -370,15 +375,23 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             //
             // This is because if the sender ever touches this
             //
-            let fm = unsafe { rxin.frame_mut() };
-            if let Some(w) = fm.waker.replace(cx.waker().clone()) {
+
+            // let fm = unsafe { rxin.frame_mut() };
+
+            log::trace!("Replace waker {:?}", rxin.waker);
+
+            if let Some(w) = rxin.waker.replace(cx.waker().clone()) {
                 w.wake();
             }
             self.frame = Some(rxin);
             return Poll::Pending;
         }
 
-        Poll::Pending
+        // any OTHER observed values of `was` indicates that this future has
+        // lived longer than it should have.
+        //
+        // We have had a bad day.
+        Poll::Ready(Err(Error::InvalidFrameState))
     }
 }
 
@@ -446,9 +459,6 @@ mod tests {
         let storage: PduStorage<NUM_FRAMES, 128> = PduStorage::new();
         let s = storage.as_ref();
 
-        assert_eq!(
-            unsafe { s.alloc_frame(Command::Whatever, 129) },
-            Err(Error::DataTooLong)
-        );
+        assert!(unsafe { s.alloc_frame(Command::Whatever, 129) }.is_err());
     }
 }
