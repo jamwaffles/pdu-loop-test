@@ -360,15 +360,15 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             None => return Poll::Ready(Err(Error::NoFrame)),
         };
 
-        if let Some(w) = unsafe { rxin.frame() }
-            .waker
-            .write()
-            .replace(cx.waker().clone())
-        {
-            log::debug!("Have waker");
-            w.wake();
+        if let Some(mut waker) = unsafe { rxin.frame() }.waker.try_write() {
+            if let Some(w) = waker.replace(cx.waker().clone()) {
+                log::debug!("Have waker");
+                w.wake();
+            } else {
+                log::debug!("Set waker");
+            }
         } else {
-            log::debug!("Set waker");
+            log::warn!("Waker contention");
         }
 
         self.frame = Some(rxin);
