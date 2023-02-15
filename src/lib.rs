@@ -171,20 +171,23 @@ mod tests {
     use std::thread;
     use tokio::runtime::Handle;
 
-    static STORAGE: PduStorage<16, 128> = PduStorage::<16, 128>::new();
-    static PDU_LOOP: PduLoop = PduLoop::new(STORAGE.as_ref());
+    // static STORAGE: PduStorage<16, 128> = PduStorage::<16, 128>::new();
+    // static PDU_LOOP: PduLoop = PduLoop::new(STORAGE.as_ref());
 
     #[test]
     fn broadcast_zeros() {
+        let storage: PduStorage<16, 128> = PduStorage::<16, 128>::new();
+        let pdu_loop: PduLoop = PduLoop::new(storage.as_ref());
+
         // Comment out to make this test work with miri
-        env_logger::try_init().ok();
+        // env_logger::try_init().ok();
 
         // let storage = PduStorage::<16, 128>::new();
         // let pdu_loop = PduLoop::new(storage.as_ref());
 
-        let (s, mut r) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-
         let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // let (s, mut r) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
         // let handle =rt.handle();
 
@@ -249,7 +252,6 @@ mod tests {
         //     })
         //     .unwrap();
 
-        rt.handle()
-            .block_on(PDU_LOOP.pdu_broadcast_zeros(0x1234, 16));
+        rt.block_on(pdu_loop.pdu_broadcast_zeros(0x1234, 16));
     }
 }
