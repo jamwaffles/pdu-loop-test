@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
     task::Poll,
 };
-use std::task::Waker;
+use std::{sync::atomic::AtomicBool, task::Waker};
 
 use spin::RwLock;
 
@@ -110,6 +110,7 @@ impl<'a> PduStorageRef<'a> {
     }
 
     // TODO: Wrap in ReceivingFrame to constrain methods
+    /// Updates state from SENDING -> RX_BUSY
     pub fn get_receiving(&self, idx: u8) -> Option<FrameBox<'a>> {
         let idx = usize::from(idx);
 
@@ -390,10 +391,15 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         log::trace!("Was {}", was);
 
-        unsafe { rxin.frame() }
-            .waker
-            .write()
-            .replace(cx.waker().clone());
+        match was {
+            FrameState::SENDABLE | FrameState::SENDING => {
+                unsafe { rxin.frame() }
+                    .waker
+                    .write()
+                    .replace(cx.waker().clone());
+            }
+            _ => (),
+        }
 
         self.frame = Some(rxin);
 
