@@ -151,7 +151,7 @@ impl<'a> PduLoop<'a> {
         //     rxin_frame.reset_readable();
         // }
 
-        let (frame, frame_data) = unsafe { rxin_frame.frame_and_buf_mut() };
+        // let (frame, frame_data) = unsafe { rxin_frame.frame_and_buf_mut() };
 
         // TODO: Set frame data
 

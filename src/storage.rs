@@ -360,40 +360,44 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             None => return Poll::Ready(Err(Error::NoFrame)),
         };
 
-        if let Some(mut waker) = unsafe { rxin.frame() }.waker.try_write() {
-            if let Some(w) = waker.replace(cx.waker().clone()) {
-                log::debug!("Have waker");
-                w.wake();
-            } else {
-                log::debug!("Set waker");
-            }
-        } else {
-            log::warn!("Waker contention");
-        }
-
-        self.frame = Some(rxin);
-
-        if self.count > 10 {
-            return Poll::Ready(Ok(()));
-        } else {
-            return Poll::Pending;
-        }
+        // if let Some(mut waker) = unsafe { rxin.frame() }.waker.try_write() {
+        //     if let Some(w) = waker.replace(cx.waker().clone()) {
+        //         log::debug!("Have waker");
+        //         w.wake();
+        //     } else {
+        //         log::debug!("Set waker");
+        //     }
+        // } else {
+        //     log::warn!("Waker contention");
+        // }
 
         // let mut rxin = match self.frame.take() {
         //     Some(r) => r,
         //     None => return Poll::Ready(Err(Error::NoFrame)),
         // };
 
-        // let swappy = unsafe {
-        //     FrameElement::swap_state(rxin.frame, FrameState::RX_DONE, FrameState::RX_PROCESSING)
-        // };
-        // let was = match swappy {
-        //     Ok(fe) => {
-        //         log::trace!("Frame future is ready");
-        //         return Poll::Ready(Ok(ReceivedFrame { frame: rxin }));
-        //     }
-        //     Err(e) => e,
-        // };
+        let swappy = unsafe {
+            FrameElement::swap_state(rxin.frame, FrameState::RX_DONE, FrameState::RX_PROCESSING)
+        };
+
+        let was = match swappy {
+            Ok(fe) => {
+                log::trace!("Frame future is ready");
+                return Poll::Ready(Ok(()));
+            }
+            Err(e) => e,
+        };
+
+        log::trace!("Was {}", was);
+
+        unsafe { rxin.frame() }
+            .waker
+            .write()
+            .replace(cx.waker().clone());
+
+        self.frame = Some(rxin);
+
+        Poll::Pending
 
         // // These are the states from the time we start sending until the response
         // // is received. If we observe any of these, it's fine, and we should keep
