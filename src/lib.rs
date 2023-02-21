@@ -175,8 +175,8 @@ mod tests {
     static STORAGE: PduStorage<16, 128> = PduStorage::<16, 128>::new();
     static PDU_LOOP: PduLoop = PduLoop::new(STORAGE.as_ref());
 
-    #[tokio::test]
-    async fn broadcast_zeros() {
+    #[test]
+    fn broadcast_zeros() {
         // Comment out to make this test work with miri
         env_logger::try_init().ok();
 
@@ -187,18 +187,21 @@ mod tests {
 
         let (s, mut r) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-        let handle = Handle::current();
-
         let tx_handle = thread::Builder::new()
             .name("TX task".to_string())
             .spawn(move || {
-                handle.block_on(async move {
+                futures_lite::future::block_on(async move {
                     let mut packet_buf = [0u8; 1536];
 
                     log::info!("Spawn TX task");
 
+                    let mut count = 0;
+                    let threshold = 1;
+
                     core::future::poll_fn::<(), _>(move |ctx| {
                         log::info!("Poll fn");
+
+                        count += 1;
 
                         PDU_LOOP
                             .send_frames_blocking(ctx.waker(), |frame| {
@@ -216,19 +219,21 @@ mod tests {
                             })
                             .unwrap();
 
-                        Poll::Pending
+                        if count >= threshold {
+                            Poll::Ready(())
+                        } else {
+                            Poll::Pending
+                        }
                     })
                     .await
                 })
             })
             .unwrap();
 
-        let handle = Handle::current();
-
         let rx_handle = thread::Builder::new()
             .name("RX task".to_string())
             .spawn(move || {
-                handle.block_on(async move {
+                futures_lite::future::block_on(async move {
                     log::info!("Spawn RX task");
 
                     while let Some(ethernet_frame) = r.recv().await {
@@ -250,6 +255,9 @@ mod tests {
             })
             .unwrap();
 
-        PDU_LOOP.pdu_broadcast_zeros(0x1234, 16).await.unwrap();
+        futures_lite::future::block_on(PDU_LOOP.pdu_broadcast_zeros(0x1234, 16)).unwrap();
+
+        tx_handle.join();
+        rx_handle.join();
     }
 }
