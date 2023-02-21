@@ -261,13 +261,15 @@ pub struct FrameBox<'a> {
 impl<'a> FrameBox<'a> {
     pub fn replace_waker(&self, waker: Waker) {
         unsafe { &*addr_of!((*self.frame.as_ptr()).frame.waker) }
-            .write()
+            .try_write()
+            .expect("Contention replace_waker")
             .replace(waker);
     }
 
     pub fn take_waker(&self) -> Option<Waker> {
         unsafe { &*addr_of!((*self.frame.as_ptr()).frame.waker) }
-            .write()
+            .try_write()
+            .expect("Contention take_waker")
             .take()
     }
 
@@ -419,8 +421,8 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         self.frame = Some(rxin);
 
-        // log::trace!("Poll done");
-        println!("Poll done");
+        log::trace!("Poll done");
+        // println!("Poll done");
 
         Poll::Pending
 
