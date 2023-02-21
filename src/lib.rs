@@ -9,7 +9,7 @@ use std::{cell::RefCell, marker::PhantomData};
 use nom::error::context;
 use smoltcp::wire::EthernetFrame;
 use spin::RwLock;
-use storage::{FrameBox, FrameElement, FrameState, PduStorage, PduStorageRef};
+use storage::{FrameBox, FrameElement, FrameState, PduStorage, PduStorageRef, SendableFrame};
 
 // DELETEME
 #[derive(Debug)]
@@ -50,16 +50,17 @@ impl<'a> PduLoop<'a> {
 
     pub fn send_frames_blocking<F>(&self, waker: &Waker, mut send: F) -> Result<(), Error>
     where
-        F: FnMut(&FrameBox<'_>) -> Result<(), ()>,
+        F: FnMut(&SendableFrame<'_>) -> Result<(), ()>,
     {
         for idx in 0..self.storage.len {
             let frame = unsafe { NonNull::new_unchecked(self.storage.frames.as_ptr().add(idx)) };
 
             let sending = if let Some(frame) = unsafe { FrameElement::claim_sending(frame) } {
-                // TODO: Wrap in `SendableFrame`
-                FrameBox {
-                    frame,
-                    _lifetime: PhantomData,
+                SendableFrame {
+                    inner: FrameBox {
+                        frame,
+                        _lifetime: PhantomData,
+                    },
                 }
             } else {
                 continue;
@@ -209,7 +210,8 @@ mod tests {
                                 //     .write_ethernet_packet(&mut packet_buf, data)
                                 //     .expect("Write Ethernet frame");
 
-                                let packet = [unsafe { frame.frame() }.index; 16];
+                                // Make up some garbage data
+                                let packet = [unsafe { frame.inner.frame() }.index; 16];
 
                                 s.send(packet.to_vec()).unwrap();
 

@@ -75,8 +75,11 @@ pub struct PduStorageRef<'a> {
 unsafe impl<'a> Sync for PduStorageRef<'a> {}
 
 impl<'a> PduStorageRef<'a> {
-    // TODO: CreatedFrame struct to encapsulate functions
-    pub fn alloc_frame(&self, command: Command, data_length: u16) -> Result<FrameBox<'a>, Error> {
+    pub fn alloc_frame(
+        &self,
+        command: Command,
+        data_length: u16,
+    ) -> Result<CreatedFrame<'a>, Error> {
         let data_length = usize::from(data_length);
 
         if data_length > self.frame_data_len {
@@ -103,15 +106,16 @@ impl<'a> PduStorageRef<'a> {
             buf_ptr.write_bytes(0x00, data_length);
         }
 
-        Ok(FrameBox {
-            frame,
-            _lifetime: PhantomData,
+        Ok(CreatedFrame {
+            inner: FrameBox {
+                frame,
+                _lifetime: PhantomData,
+            },
         })
     }
 
-    // TODO: Wrap in ReceivingFrame to constrain methods
     /// Updates state from SENDING -> RX_BUSY
-    pub fn get_receiving(&self, idx: u8) -> Option<FrameBox<'a>> {
+    pub fn get_receiving(&self, idx: u8) -> Option<ReceivingFrame<'a>> {
         let idx = usize::from(idx);
 
         if idx >= self.len {
@@ -123,9 +127,11 @@ impl<'a> PduStorageRef<'a> {
         let frame = unsafe { NonNull::new_unchecked(self.frames.as_ptr().add(idx)) };
         let frame = unsafe { FrameElement::claim_receiving(frame)? };
 
-        Some(FrameBox {
-            frame,
-            _lifetime: PhantomData,
+        Some(ReceivingFrame {
+            inner: FrameBox {
+                frame,
+                _lifetime: PhantomData,
+            },
         })
     }
 }
@@ -250,7 +256,6 @@ impl<const N: usize> FrameElement<N> {
 }
 
 // Used to store a FrameElement with erased const generics
-// TODO: Create wrapper types so we can confine method calls to only certain states
 #[derive(Debug)]
 pub struct FrameBox<'a> {
     pub frame: NonNull<FrameElement<0>>,
@@ -304,30 +309,48 @@ impl<'a> FrameBox<'a> {
         let ptr = FrameElement::<0>::buf_ptr(self.frame);
         core::slice::from_raw_parts_mut(ptr.as_ptr(), self.buf_len())
     }
+}
 
-    // TODO: Move to CreatedFrame
+#[derive(Debug)]
+pub struct CreatedFrame<'a> {
+    inner: FrameBox<'a>,
+}
+
+impl<'a> CreatedFrame<'a> {
     pub fn mark_sendable(self) -> ReceiveFrameFut<'a> {
         unsafe {
-            FrameElement::set_state(self.frame, FrameState::SENDABLE);
+            FrameElement::set_state(self.inner.frame, FrameState::SENDABLE);
         }
         ReceiveFrameFut {
-            frame: Some(self),
+            frame: Some(self.inner),
             count: 0,
         }
     }
+}
 
-    // TODO: Move to SendableFrame
+#[derive(Debug)]
+pub struct SendableFrame<'a> {
+    pub(crate) inner: FrameBox<'a>,
+}
+
+impl<'a> SendableFrame<'a> {
     pub fn mark_sent(self) {
         log::trace!("Mark sent");
 
         unsafe {
-            FrameElement::set_state(self.frame, FrameState::SENDING);
+            FrameElement::set_state(self.inner.frame, FrameState::SENDING);
         }
     }
+}
 
-    // TODO: Move to ReceivingFrame
+#[derive(Debug)]
+pub struct ReceivingFrame<'a> {
+    inner: FrameBox<'a>,
+}
+
+impl<'a> ReceivingFrame<'a> {
     pub fn mark_received(mut self) -> Result<(), Error> {
-        let (frame, buf) = unsafe { self.frame_and_buf() };
+        let (frame, buf) = unsafe { self.inner.frame_and_buf() };
 
         log::trace!("Frame and buf mark_received");
 
@@ -335,7 +358,7 @@ impl<'a> FrameBox<'a> {
 
         log::trace!("Mark received, waker is {:?}", frame.waker);
 
-        let waker = self.take_waker().ok_or_else(|| {
+        let waker = self.inner.take_waker().ok_or_else(|| {
             log::error!(
                 "Attempted to wake frame #{} with no waker, possibly caused by timeout",
                 frame.index
@@ -345,7 +368,7 @@ impl<'a> FrameBox<'a> {
         })?;
 
         unsafe {
-            FrameElement::set_state(self.frame, FrameState::RX_DONE);
+            FrameElement::set_state(self.inner.frame, FrameState::RX_DONE);
         }
 
         waker.wake();
