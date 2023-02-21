@@ -327,26 +327,22 @@ impl<'a> FrameBox<'a> {
 
     // TODO: Move to ReceivingFrame
     pub fn mark_received(mut self) -> Result<(), Error> {
-        let waker = {
-            let (frame, buf) = unsafe { self.frame_and_buf() };
+        let (frame, buf) = unsafe { self.frame_and_buf() };
 
-            log::trace!("Frame and buf mark_received");
+        log::trace!("Frame and buf mark_received");
 
-            let idx = frame.index;
+        let idx = frame.index;
 
-            // log::trace!("Mark received, waker is {:?}", frame.waker);
+        log::trace!("Mark received, waker is {:?}", frame.waker);
 
-            let waker = self.take_waker().ok_or_else(|| {
-                log::error!(
-                    "Attempted to wake frame #{} with no waker, possibly caused by timeout",
-                    frame.index
-                );
+        let waker = self.take_waker().ok_or_else(|| {
+            log::error!(
+                "Attempted to wake frame #{} with no waker, possibly caused by timeout",
+                frame.index
+            );
 
-                Error::InvalidFrameState
-            })?;
-
-            waker
-        };
+            Error::InvalidFrameState
+        })?;
 
         unsafe {
             FrameElement::set_state(self.frame, FrameState::RX_DONE);
