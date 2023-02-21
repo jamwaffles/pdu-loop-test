@@ -133,6 +133,8 @@ impl<'a> PduLoop<'a> {
             .get_receiving(index)
             .expect("todo(ajm) should fix this/data race says what?");
 
+        log::trace!("RXIN frame");
+
         // TODO
         // if frame.pdu.index != index {
         //     rxin_frame.reset_readable();

@@ -259,6 +259,18 @@ pub struct FrameBox<'a> {
 
 // TODO: Un-pub all
 impl<'a> FrameBox<'a> {
+    pub fn replace_waker(&self, waker: Waker) {
+        unsafe { &*addr_of!((*self.frame.as_ptr()).frame.waker) }
+            .write()
+            .replace(waker);
+    }
+
+    pub fn take_waker(&self) -> Option<Waker> {
+        unsafe { &*addr_of!((*self.frame.as_ptr()).frame.waker) }
+            .write()
+            .take()
+    }
+
     pub unsafe fn frame(&self) -> &PduFrame {
         unsafe { &*addr_of!((*self.frame.as_ptr()).frame) }
     }
@@ -313,26 +325,33 @@ impl<'a> FrameBox<'a> {
 
     // TODO: Move to ReceivingFrame
     pub fn mark_received(mut self) -> Result<(), Error> {
-        let (frame, buf) = unsafe { self.frame_and_buf_mut() };
+        let waker = {
+            let (frame, buf) = unsafe { self.frame_and_buf() };
 
-        let idx = frame.index;
+            log::trace!("Frame and buf mark_received");
 
-        log::trace!("Mark received, waker is {:?}", frame.waker);
+            let idx = frame.index;
 
-        let waker = frame.waker.write().take().ok_or_else(|| {
-            log::error!(
-                "Attempted to wake frame #{} with no waker, possibly caused by timeout",
-                idx
-            );
+            // log::trace!("Mark received, waker is {:?}", frame.waker);
 
-            Error::InvalidFrameState
-        })?;
+            let waker = self.take_waker().ok_or_else(|| {
+                log::error!(
+                    "Attempted to wake frame #{} with no waker, possibly caused by timeout",
+                    frame.index
+                );
 
-        waker.wake();
+                Error::InvalidFrameState
+            })?;
+
+            waker
+        };
 
         unsafe {
             FrameElement::set_state(self.frame, FrameState::RX_DONE);
         }
+
+        waker.wake();
+
         Ok(())
     }
 }
@@ -350,8 +369,6 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
     ) -> Poll<Self::Output> {
-        // log::trace!("Poll fut");
-
         self.count += 1;
 
         log::debug!("Poll fut {:?} times", self.count);
@@ -360,6 +377,8 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             Some(r) => r,
             None => return Poll::Ready(Err(Error::NoFrame)),
         };
+
+        log::trace!("Take");
 
         // if let Some(mut waker) = unsafe { rxin.frame() }.waker.try_write() {
         //     if let Some(w) = waker.replace(cx.waker().clone()) {
@@ -381,6 +400,8 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             FrameElement::swap_state(rxin.frame, FrameState::RX_DONE, FrameState::RX_PROCESSING)
         };
 
+        log::trace!("Swappy");
+
         let was = match swappy {
             Ok(fe) => {
                 log::trace!("Frame future is ready");
@@ -392,16 +413,14 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         log::trace!("Was {}", was);
 
         match was {
-            FrameState::SENDABLE | FrameState::SENDING => {
-                unsafe { rxin.frame() }
-                    .waker
-                    .write()
-                    .replace(cx.waker().clone());
-            }
-            _ => (),
+            FrameState::SENDABLE | FrameState::SENDING => rxin.replace_waker(cx.waker().clone()),
+            _ => return Poll::Ready(Err(Error::InvalidFrameState)),
         }
 
         self.frame = Some(rxin);
+
+        // log::trace!("Poll done");
+        println!("Poll done");
 
         Poll::Pending
 
