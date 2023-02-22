@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
     task::Poll,
 };
-use std::{sync::atomic::AtomicBool, task::Waker};
+use std::{ops::Deref, sync::atomic::AtomicBool, task::Waker};
 
 use spin::RwLock;
 
@@ -150,8 +150,6 @@ impl<const N: usize> FrameElement<N> {
     }
 
     unsafe fn set_state(this: NonNull<FrameElement<N>>, state: usize) {
-        // TODO: not every state?
-
         let fptr = this.as_ptr();
 
         (&*addr_of_mut!((*fptr).status))
@@ -256,6 +254,11 @@ impl<'a> FrameBox<'a> {
         (frame, buf)
     }
 
+    pub unsafe fn buf(&self) -> &[u8] {
+        let ptr = FrameElement::<0>::buf_ptr(self.frame);
+        core::slice::from_raw_parts(ptr.as_ptr(), self.buf_len())
+    }
+
     pub unsafe fn buf_mut(&mut self) -> &mut [u8] {
         let ptr = FrameElement::<0>::buf_ptr(self.frame);
         core::slice::from_raw_parts_mut(ptr.as_ptr(), self.buf_len())
@@ -301,7 +304,7 @@ pub struct ReceivingFrame<'a> {
 
 impl<'a> ReceivingFrame<'a> {
     pub fn mark_received(mut self) -> Result<(), Error> {
-        let (frame, buf) = unsafe { self.inner.frame_and_buf() };
+        let frame = unsafe { self.inner.frame() };
 
         log::trace!("Frame and buf mark_received");
 
@@ -325,6 +328,14 @@ impl<'a> ReceivingFrame<'a> {
         waker.wake();
 
         Ok(())
+    }
+
+    pub fn buf_mut(&mut self) -> &mut [u8] {
+        unsafe { self.inner.buf_mut() }
+    }
+
+    pub fn reset_readable(self) {
+        unsafe { FrameElement::set_state(self.inner.frame, FrameState::NONE) }
     }
 }
 
@@ -385,9 +396,34 @@ pub struct ReceivedFrame<'sto> {
     inner: FrameBox<'sto>,
 }
 
+impl<'sto> ReceivedFrame<'sto> {
+    fn len(&self) -> usize {
+        // TODO
+        //  let len: usize = self.frame().pdu.flags.len().into();
+        // debug_assert!(len <= self.fb.buf_len);
+
+        // HACK
+        let len = 16;
+
+        len
+    }
+
+    // TODO: Add wkc(), etc
+}
+
 impl<'sto> Drop for ReceivedFrame<'sto> {
     fn drop(&mut self) {
         unsafe { FrameElement::set_state(self.inner.frame, FrameState::NONE) }
+    }
+}
+
+impl<'sto> Deref for ReceivedFrame<'sto> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        let len = self.len();
+
+        unsafe { self.inner.buf() }
     }
 }
 

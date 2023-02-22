@@ -9,7 +9,9 @@ use std::{cell::RefCell, marker::PhantomData};
 use nom::error::context;
 use smoltcp::wire::EthernetFrame;
 use spin::RwLock;
-use storage::{FrameBox, FrameElement, FrameState, PduStorage, PduStorageRef, SendableFrame};
+use storage::{
+    FrameBox, FrameElement, FrameState, PduStorage, PduStorageRef, ReceivedFrame, SendableFrame,
+};
 
 // DELETEME
 #[derive(Debug)]
@@ -88,7 +90,7 @@ impl<'a> PduLoop<'a> {
         &self,
         register: u16,
         payload_length: u16,
-    ) -> Result<(), Error> {
+    ) -> Result<ReceivedFrame<'_>, Error> {
         let mut frame = unsafe { self.storage.alloc_frame(Command::Whatever, payload_length) }?;
 
         // Buffer is initialised with zeroes
@@ -99,9 +101,7 @@ impl<'a> PduLoop<'a> {
 
         let res = frame.await?;
 
-        // dbg!(res);
-
-        Ok(())
+        Ok(res)
     }
 
     pub fn pdu_rx(&self, ethernet_frame: &[u8]) -> Result<(), Error> {
@@ -150,13 +150,13 @@ impl<'a> PduLoop<'a> {
 
         // TODO
         // if command.code() != frame.pdu().command().code() {
-        //     let received = frame.pdu().command();
         //     rxin_frame.reset_readable();
         // }
 
-        // let (frame, frame_data) = unsafe { rxin_frame.frame_and_buf_mut() };
+        let frame_data = unsafe { rxin_frame.buf_mut() };
 
-        // TODO: Set frame data
+        // TODO: Set real frame data
+        frame_data.fill(0xff);
 
         // Wakes frame future, sets RX_DONE
         rxin_frame.mark_received();
@@ -257,7 +257,10 @@ mod tests {
             })
             .unwrap();
 
-        futures_lite::future::block_on(PDU_LOOP.pdu_broadcast_zeros(0x1234, 16)).unwrap();
+        let frame =
+            futures_lite::future::block_on(PDU_LOOP.pdu_broadcast_zeros(0x1234, 16)).unwrap();
+
+        assert_eq!(*frame, [0xff; 16]);
 
         tx_handle.join();
         rx_handle.join();
