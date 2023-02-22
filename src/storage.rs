@@ -4,7 +4,7 @@ use core::{
     marker::PhantomData,
     mem::MaybeUninit,
     ptr::{addr_of, addr_of_mut, NonNull},
-    sync::atomic::{AtomicU8, AtomicUsize, Ordering},
+    sync::atomic::{AtomicU8, Ordering},
     task::Poll,
 };
 use std::{ops::Deref, task::Waker};
@@ -13,17 +13,20 @@ use spin::RwLock;
 
 use crate::{Command, Error};
 
-#[derive(Debug)]
-pub struct FrameState(AtomicUsize);
-
-impl FrameState {
-    const NONE: usize = 0;
-    const CREATED: usize = 1;
-    const SENDABLE: usize = 2;
-    const SENDING: usize = 3;
-    const RX_BUSY: usize = 5;
-    const RX_DONE: usize = 6;
-    const RX_PROCESSING: usize = 7;
+#[atomic_enum::atomic_enum]
+#[derive(PartialEq, Default)]
+pub enum FrameState {
+    // SAFETY: Because we create a bunch of `Frame`s with `MaybeUninit::zeroed`, the `None` state
+    // MUST be equal to zero. All other fields in `Frame` are overridden in `replace`, so there
+    // should be no UB there.
+    #[default]
+    None = 0,
+    Created = 1,
+    Sendable = 2,
+    Sending = 3,
+    RxBusy = 5,
+    RxDone = 6,
+    RxProcessing = 7,
 }
 
 #[derive(Debug)]
@@ -138,7 +141,7 @@ impl<'a> PduStorageRef<'a> {
 #[repr(C)]
 pub struct FrameElement<const N: usize> {
     frame: PduFrame,
-    status: FrameState,
+    status: AtomicFrameState,
     buffer: [u8; N],
 }
 
@@ -149,22 +152,20 @@ impl<const N: usize> FrameElement<N> {
         NonNull::new_unchecked(buf_ptr)
     }
 
-    unsafe fn set_state(this: NonNull<FrameElement<N>>, state: usize) {
+    unsafe fn set_state(this: NonNull<FrameElement<N>>, state: FrameState) {
         let fptr = this.as_ptr();
 
-        (&*addr_of_mut!((*fptr).status))
-            .0
-            .store(state, Ordering::Release);
+        (&*addr_of_mut!((*fptr).status)).store(state, Ordering::Release);
     }
 
     unsafe fn swap_state(
         this: NonNull<FrameElement<N>>,
-        from: usize,
-        to: usize,
-    ) -> Result<NonNull<FrameElement<N>>, usize> {
+        from: FrameState,
+        to: FrameState,
+    ) -> Result<NonNull<FrameElement<N>>, FrameState> {
         let fptr = this.as_ptr();
 
-        (&*addr_of_mut!((*fptr).status)).0.compare_exchange(
+        (&*addr_of_mut!((*fptr).status)).compare_exchange(
             from,
             to,
             Ordering::AcqRel,
@@ -180,11 +181,11 @@ impl<const N: usize> FrameElement<N> {
     pub unsafe fn claim_created(
         this: NonNull<FrameElement<N>>,
     ) -> Result<NonNull<FrameElement<N>>, Error> {
-        Self::swap_state(this, FrameState::NONE, FrameState::CREATED).map_err(|e| {
+        Self::swap_state(this, FrameState::None, FrameState::Created).map_err(|e| {
             log::error!(
                 "Failed to claim frame: status is {:?}, expected {:?}",
                 e,
-                FrameState::NONE
+                FrameState::None
             );
 
             Error::SwapState
@@ -194,13 +195,13 @@ impl<const N: usize> FrameElement<N> {
     pub unsafe fn claim_sending(
         this: NonNull<FrameElement<N>>,
     ) -> Option<NonNull<FrameElement<N>>> {
-        Self::swap_state(this, FrameState::SENDABLE, FrameState::SENDING).ok()
+        Self::swap_state(this, FrameState::Sendable, FrameState::Sending).ok()
     }
 
     pub unsafe fn claim_receiving(
         this: NonNull<FrameElement<N>>,
     ) -> Option<NonNull<FrameElement<N>>> {
-        Self::swap_state(this, FrameState::SENDING, FrameState::RX_BUSY).ok()
+        Self::swap_state(this, FrameState::Sending, FrameState::RxBusy).ok()
     }
 }
 
@@ -273,7 +274,7 @@ pub struct CreatedFrame<'a> {
 impl<'a> CreatedFrame<'a> {
     pub fn mark_sendable(self) -> ReceiveFrameFut<'a> {
         unsafe {
-            FrameElement::set_state(self.inner.frame, FrameState::SENDABLE);
+            FrameElement::set_state(self.inner.frame, FrameState::Sendable);
         }
         ReceiveFrameFut {
             frame: Some(self.inner),
@@ -296,7 +297,7 @@ impl<'a> SendableFrame<'a> {
         log::trace!("Mark sent");
 
         unsafe {
-            FrameElement::set_state(self.inner.frame, FrameState::SENDING);
+            FrameElement::set_state(self.inner.frame, FrameState::Sending);
         }
     }
 
@@ -345,7 +346,7 @@ impl<'a> ReceivingFrame<'a> {
         })?;
 
         unsafe {
-            FrameElement::set_state(self.inner.frame, FrameState::RX_DONE);
+            FrameElement::set_state(self.inner.frame, FrameState::RxDone);
         }
 
         waker.wake();
@@ -358,7 +359,7 @@ impl<'a> ReceivingFrame<'a> {
     }
 
     pub fn reset_readable(self) {
-        unsafe { FrameElement::set_state(self.inner.frame, FrameState::NONE) }
+        unsafe { FrameElement::set_state(self.inner.frame, FrameState::None) }
     }
 }
 
@@ -386,7 +387,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         log::trace!("Take");
 
         let swappy = unsafe {
-            FrameElement::swap_state(rxin.frame, FrameState::RX_DONE, FrameState::RX_PROCESSING)
+            FrameElement::swap_state(rxin.frame, FrameState::RxDone, FrameState::RxProcessing)
         };
 
         log::trace!("Swappy");
@@ -399,10 +400,10 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
             Err(e) => e,
         };
 
-        log::trace!("Was {}", was);
+        log::trace!("Was {:?}", was);
 
         match was {
-            FrameState::SENDABLE | FrameState::SENDING => {
+            FrameState::Sendable | FrameState::Sending => {
                 unsafe { rxin.replace_waker(cx.waker().clone()) };
 
                 self.frame = Some(rxin);
@@ -436,7 +437,7 @@ impl<'sto> ReceivedFrame<'sto> {
 
 impl<'sto> Drop for ReceivedFrame<'sto> {
     fn drop(&mut self) {
-        unsafe { FrameElement::set_state(self.inner.frame, FrameState::NONE) }
+        unsafe { FrameElement::set_state(self.inner.frame, FrameState::None) }
     }
 }
 
