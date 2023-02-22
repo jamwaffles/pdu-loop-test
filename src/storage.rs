@@ -19,13 +19,21 @@ pub enum FrameState {
     // SAFETY: Because we create a bunch of `Frame`s with `MaybeUninit::zeroed`, the `None` state
     // MUST be equal to zero. All other fields in `Frame` are overridden in `replace`, so there
     // should be no UB there.
+    /// The frame is ready to be claimed
     #[default]
     None = 0,
+    /// The frame is claimed and can be initialised ready for sending.
     Created = 1,
+    /// The frame is ready to send when the TX loop next runs.
     Sendable = 2,
+    /// The frame is being sent over the network interface.
     Sending = 3,
+    /// A frame response has been received and is now ready for parsing.
     RxBusy = 5,
+    /// Frame response parsing is complete. The frame and its data is ready to be returned in
+    /// `Poll::Ready`.
     RxDone = 6,
+    /// The frame TX/RX is complete, but the frame is still in use by calling code.
     RxProcessing = 7,
 }
 
