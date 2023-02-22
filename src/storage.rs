@@ -136,52 +136,6 @@ impl<'a> PduStorageRef<'a> {
     }
 }
 
-// impl<'a> PduStorageRef<'a> {
-//     unsafe fn swap_state(
-//         this: NonNull<FrameElement<0>>,
-//         from: usize,
-//         to: usize,
-//     ) -> Result<NonNull<FrameElement<0>>, usize> {
-//         let fptr = this.as_ptr();
-
-//         (&*addr_of_mut!((*fptr).status)).0.compare_exchange(
-//             from,
-//             to,
-//             Ordering::AcqRel,
-//             Ordering::Relaxed,
-//         )?;
-
-//         // If we got here, it's ours.
-//         Ok(this)
-//     }
-
-//     pub unsafe fn claim_created(&self) -> Result<FrameBox<'a>, Error> {
-//         let idx = self.idx.fetch_add(1, Ordering::Relaxed);
-
-//         let idx = (idx as usize) % self.len;
-
-//         let frame = NonNull::new_unchecked(self.frames.as_ptr().add(idx));
-
-//         let frame = Self::swap_state(frame, FrameState::NONE, FrameState::CREATED)
-//             .map_err(|_| Error::Anything)?;
-
-//         // Initialise frame
-//         unsafe {
-//             addr_of_mut!((*frame.as_ptr()).frame).write(PduFrame {
-//                 // todo
-//             });
-//             let buf_ptr = addr_of_mut!((*frame.as_ptr()).buffer);
-//             buf_ptr.write_bytes(0x00, self.frame_data_len);
-//         }
-
-//         Ok(FrameBox {
-//             frame,
-//             buf_len: self.frame_data_len,
-//             _lifetime: PhantomData,
-//         })
-//     }
-// }
-
 /// An individual frame state, PDU header config, and data buffer.
 #[derive(Debug)]
 #[repr(C)]
@@ -226,8 +180,8 @@ impl<const N: usize> FrameElement<N> {
         Ok(this)
     }
 
-    /// Attempt to clame a frame element as CREATED. Succeeds if the selected
-    /// FrameElement is currently in the NONE state.
+    /// Attempt to clame a frame element as CREATED. Succeeds if the selected FrameElement is
+    /// currently in the NONE state.
     pub unsafe fn claim_created(
         this: NonNull<FrameElement<N>>,
     ) -> Result<NonNull<FrameElement<N>>, Error> {
@@ -264,15 +218,15 @@ pub struct FrameBox<'a> {
 
 // TODO: Un-pub all
 impl<'a> FrameBox<'a> {
-    pub fn replace_waker(&self, waker: Waker) {
-        unsafe { &*addr_of!((*self.frame.as_ptr()).frame.waker) }
+    pub unsafe fn replace_waker(&self, waker: Waker) {
+        (&*addr_of!((*self.frame.as_ptr()).frame.waker))
             .try_write()
             .expect("Contention replace_waker")
             .replace(waker);
     }
 
-    pub fn take_waker(&self) -> Option<Waker> {
-        unsafe { &*addr_of!((*self.frame.as_ptr()).frame.waker) }
+    pub unsafe fn take_waker(&self) -> Option<Waker> {
+        (&*addr_of!((*self.frame.as_ptr()).frame.waker))
             .try_write()
             .expect("Contention take_waker")
             .take()
@@ -358,7 +312,7 @@ impl<'a> ReceivingFrame<'a> {
 
         log::trace!("Mark received, waker is {:?}", frame.waker);
 
-        let waker = self.inner.take_waker().ok_or_else(|| {
+        let waker = unsafe { self.inner.take_waker() }.ok_or_else(|| {
             log::error!(
                 "Attempted to wake frame #{} with no waker, possibly caused by timeout",
                 frame.index
@@ -401,22 +355,6 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         log::trace!("Take");
 
-        // if let Some(mut waker) = unsafe { rxin.frame() }.waker.try_write() {
-        //     if let Some(w) = waker.replace(cx.waker().clone()) {
-        //         log::debug!("Have waker");
-        //         w.wake();
-        //     } else {
-        //         log::debug!("Set waker");
-        //     }
-        // } else {
-        //     log::warn!("Waker contention");
-        // }
-
-        // let mut rxin = match self.frame.take() {
-        //     Some(r) => r,
-        //     None => return Poll::Ready(Err(Error::NoFrame)),
-        // };
-
         let swappy = unsafe {
             FrameElement::swap_state(rxin.frame, FrameState::RX_DONE, FrameState::RX_PROCESSING)
         };
@@ -434,50 +372,15 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         log::trace!("Was {}", was);
 
         match was {
-            FrameState::SENDABLE | FrameState::SENDING => rxin.replace_waker(cx.waker().clone()),
-            _ => return Poll::Ready(Err(Error::InvalidFrameState)),
+            FrameState::SENDABLE | FrameState::SENDING => {
+                unsafe { rxin.replace_waker(cx.waker().clone()) };
+
+                self.frame = Some(rxin);
+
+                Poll::Pending
+            }
+            _ => Poll::Ready(Err(Error::InvalidFrameState)),
         }
-
-        self.frame = Some(rxin);
-
-        log::trace!("Poll done");
-        // println!("Poll done");
-
-        Poll::Pending
-
-        // // These are the states from the time we start sending until the response
-        // // is received. If we observe any of these, it's fine, and we should keep
-        // // waiting.
-        // let okay = &[
-        //     FrameState::SENDABLE,
-        //     FrameState::SENDING,
-        //     // FrameState::WAIT_RX,
-        //     // FrameState::RX_BUSY,
-        //     FrameState::RX_DONE,
-        // ];
-
-        // if okay.iter().any(|s| s == &was) {
-        //     // TODO: touching the waker here would be unsound!
-        //     //
-        //     // This is because if the sender ever touches this
-        //     //
-
-        //     // let fm = unsafe { rxin.frame_mut() };
-
-        //     log::trace!("Replace waker {:?}", rxin.waker);
-
-        //     // if let Some(w) = rxin.waker.replace(cx.waker().clone()) {
-        //     //     // w.wake();
-        //     // }
-        //     self.frame = Some(rxin);
-        //     return Poll::Pending;
-        // }
-
-        // // any OTHER observed values of `was` indicates that this future has
-        // // lived longer than it should have.
-        // //
-        // // We have had a bad day.
-        // Poll::Ready(Err(Error::InvalidFrameState))
     }
 }
 
