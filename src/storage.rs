@@ -337,8 +337,7 @@ pub struct ReceiveFrameFut<'sto> {
 }
 
 impl<'sto> Future for ReceiveFrameFut<'sto> {
-    // type Output = Result<ReceivedFrame<'sto>, Error>;
-    type Output = Result<(), Error>;
+    type Output = Result<ReceivedFrame<'sto>, Error>;
 
     fn poll(
         mut self: core::pin::Pin<&mut Self>,
@@ -364,7 +363,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         let was = match swappy {
             Ok(fe) => {
                 log::trace!("Frame future is ready");
-                return Poll::Ready(Ok(()));
+                return Poll::Ready(Ok(ReceivedFrame { inner: rxin }));
             }
             Err(e) => e,
         };
@@ -386,12 +385,12 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
 #[derive(Debug)]
 pub struct ReceivedFrame<'sto> {
-    frame: FrameBox<'sto>,
+    inner: FrameBox<'sto>,
 }
 
 impl<'sto> Drop for ReceivedFrame<'sto> {
     fn drop(&mut self) {
-        unsafe { FrameElement::set_state(self.frame.frame, FrameState::NONE) }
+        unsafe { FrameElement::set_state(self.inner.frame, FrameState::NONE) }
     }
 }
 
