@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{AtomicU8, AtomicUsize, Ordering},
     task::Poll,
 };
-use std::{ops::Deref, sync::atomic::AtomicBool, task::Waker};
+use std::{ops::Deref, task::Waker};
 
 use spin::RwLock;
 
@@ -284,16 +284,39 @@ impl<'a> CreatedFrame<'a> {
 
 #[derive(Debug)]
 pub struct SendableFrame<'a> {
-    pub(crate) inner: FrameBox<'a>,
+    inner: FrameBox<'a>,
 }
 
 impl<'a> SendableFrame<'a> {
+    pub fn new(inner: FrameBox<'a>) -> Self {
+        Self { inner }
+    }
+
     pub fn mark_sent(self) {
         log::trace!("Mark sent");
 
         unsafe {
             FrameElement::set_state(self.inner.frame, FrameState::SENDING);
         }
+    }
+
+    // TODO: Generate frame with nom, etc
+    pub fn write_ethernet_packet<'buf>(&self, buf: &'buf mut [u8]) -> Result<&'buf [u8], Error> {
+        // HACK
+        const LEN: usize = 16;
+
+        if buf.len() < LEN {
+            return Err(Error::BufferTooShort);
+        }
+
+        // Fill with some garbage data
+        let packet = [unsafe { self.inner.frame() }.index; LEN];
+
+        let chunk = &mut buf[0..LEN];
+
+        chunk.copy_from_slice(&packet);
+
+        Ok(chunk)
     }
 }
 
@@ -355,7 +378,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
 
         log::debug!("Poll fut {:?} times", self.count);
 
-        let mut rxin = match self.frame.take() {
+        let rxin = match self.frame.take() {
             Some(r) => r,
             None => return Poll::Ready(Err(Error::NoFrame)),
         };
@@ -369,7 +392,7 @@ impl<'sto> Future for ReceiveFrameFut<'sto> {
         log::trace!("Swappy");
 
         let was = match swappy {
-            Ok(fe) => {
+            Ok(_frame_element) => {
                 log::trace!("Frame future is ready");
                 return Poll::Ready(Ok(ReceivedFrame { inner: rxin }));
             }
@@ -421,8 +444,6 @@ impl<'sto> Deref for ReceivedFrame<'sto> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        let len = self.len();
-
         unsafe { self.inner.buf() }
     }
 }
@@ -440,10 +461,10 @@ mod tests {
         let s = storage.as_ref();
 
         for _ in 0..NUM_FRAMES {
-            assert!(unsafe { s.alloc_frame(Command::Whatever, 128) }.is_ok());
+            assert!(s.alloc_frame(Command::Whatever, 128).is_ok());
         }
 
-        assert!(unsafe { s.alloc_frame(Command::Whatever, 128) }.is_err());
+        assert!(s.alloc_frame(Command::Whatever, 128).is_err());
     }
 
     #[test]
@@ -455,6 +476,6 @@ mod tests {
         let storage: PduStorage<NUM_FRAMES, 128> = PduStorage::new();
         let s = storage.as_ref();
 
-        assert!(unsafe { s.alloc_frame(Command::Whatever, 129) }.is_err());
+        assert!(s.alloc_frame(Command::Whatever, 129).is_err());
     }
 }

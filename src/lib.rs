@@ -1,17 +1,11 @@
 #![feature(const_maybe_uninit_zeroed)]
-#![allow(unused)]
 
 mod storage;
 
 use core::{ptr::NonNull, task::Waker};
-use std::{cell::RefCell, marker::PhantomData};
-
-use nom::error::context;
-use smoltcp::wire::EthernetFrame;
 use spin::RwLock;
-use storage::{
-    FrameBox, FrameElement, FrameState, PduStorage, PduStorageRef, ReceivedFrame, SendableFrame,
-};
+use std::marker::PhantomData;
+use storage::{FrameBox, FrameElement, PduStorageRef, ReceivedFrame, SendableFrame};
 
 // DELETEME
 #[derive(Debug)]
@@ -26,6 +20,7 @@ pub enum Error {
     NoFrame,
     InvalidFrameState,
     SendFailed,
+    BufferTooShort,
 }
 
 struct PduLoop<'a> {
@@ -58,12 +53,10 @@ impl<'a> PduLoop<'a> {
             let frame = unsafe { NonNull::new_unchecked(self.storage.frames.as_ptr().add(idx)) };
 
             let sending = if let Some(frame) = unsafe { FrameElement::claim_sending(frame) } {
-                SendableFrame {
-                    inner: FrameBox {
-                        frame,
-                        _lifetime: PhantomData,
-                    },
-                }
+                SendableFrame::new(FrameBox {
+                    frame,
+                    _lifetime: PhantomData,
+                })
             } else {
                 continue;
             };
@@ -88,10 +81,12 @@ impl<'a> PduLoop<'a> {
 
     pub async fn pdu_broadcast_zeros(
         &self,
-        register: u16,
+        _register: u16,
         payload_length: u16,
     ) -> Result<ReceivedFrame<'_>, Error> {
-        let mut frame = unsafe { self.storage.alloc_frame(Command::Whatever, payload_length) }?;
+        let frame = self
+            .storage
+            .alloc_frame(Command::Whatever, payload_length)?;
 
         // Buffer is initialised with zeroes
 
@@ -153,13 +148,13 @@ impl<'a> PduLoop<'a> {
         //     rxin_frame.reset_readable();
         // }
 
-        let frame_data = unsafe { rxin_frame.buf_mut() };
+        let frame_data = rxin_frame.buf_mut();
 
         // TODO: Set real frame data
         frame_data.fill(0xff);
 
         // Wakes frame future, sets RX_DONE
-        rxin_frame.mark_received();
+        rxin_frame.mark_received()?;
 
         Ok(())
     }
@@ -168,10 +163,8 @@ impl<'a> PduLoop<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{storage::PduStorage, PduLoop};
-    use core::{task::Poll, time::Duration};
-    use smoltcp::wire::{EthernetAddress, EthernetFrame};
+    use core::task::Poll;
     use std::thread;
-    use tokio::runtime::Handle;
 
     static STORAGE: PduStorage<16, 128> = PduStorage::<16, 128>::new();
     static PDU_LOOP: PduLoop = PduLoop::new(STORAGE.as_ref());
@@ -183,8 +176,6 @@ mod tests {
 
         // let storage = PduStorage::<16, 128>::new();
         // let pdu_loop = PduLoop::new(storage.as_ref());
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
 
         let (s, mut r) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -206,12 +197,9 @@ mod tests {
 
                         PDU_LOOP
                             .send_frames_blocking(ctx.waker(), |frame| {
-                                // let packet = frame
-                                //     .write_ethernet_packet(&mut packet_buf, data)
-                                //     .expect("Write Ethernet frame");
-
-                                // Make up some garbage data
-                                let packet = [unsafe { frame.inner.frame() }.index; 16];
+                                let packet = frame
+                                    .write_ethernet_packet(&mut packet_buf)
+                                    .expect("Write Ethernet frame");
 
                                 s.send(packet.to_vec()).unwrap();
 
@@ -262,7 +250,7 @@ mod tests {
 
         assert_eq!(*frame, [0xff; 16]);
 
-        tx_handle.join();
-        rx_handle.join();
+        tx_handle.join().unwrap();
+        rx_handle.join().unwrap();
     }
 }
