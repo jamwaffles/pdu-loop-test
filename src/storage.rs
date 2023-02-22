@@ -71,9 +71,6 @@ pub struct PduStorageRef<'a> {
     _lifetime: PhantomData<&'a ()>,
 }
 
-// TODO: Move this to `PduLoop` - it's for the outer wrapper
-unsafe impl<'a> Sync for PduStorageRef<'a> {}
-
 impl<'a> PduStorageRef<'a> {
     pub fn alloc_frame(
         &self,
@@ -396,31 +393,6 @@ impl<'sto> Drop for ReceivedFrame<'sto> {
 
 mod tests {
     use super::*;
-
-    #[test]
-    fn claim_created() {
-        let _ = env_logger::builder().is_test(true).try_init();
-
-        const NUM_FRAMES: usize = 16;
-
-        let storage: PduStorage<NUM_FRAMES, 128> = PduStorage::new();
-        let s = storage.as_ref();
-
-        std::thread::scope(|scope| {
-            let handles = (0..(NUM_FRAMES * 2))
-                .map(|_| {
-                    scope.spawn(|| {
-                        let frame = unsafe { s.alloc_frame(Command::Whatever, 128) };
-                        log::debug!("Get frame: {:?}", frame);
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            handles
-                .into_iter()
-                .for_each(|handle| log::debug!("{:?}", handle.join()));
-        });
-    }
 
     #[test]
     fn no_spare_frames() {
